@@ -141,7 +141,7 @@ ksql> show topics;
     Kafka Topic                 | Partitions | Partition Replicas 
     ---------------------------------------------------------------
     default_ksql_processing_log | 1          | 1                  
-    psg-customers               | 1          | 1                  
+    postgres-customers          | 1          | 1                  
     ---------------------------------------------------------------
 
 para mostrar os tópicos criados. Para verificar se nosso conector está rodando corretamente, podemos fazer
