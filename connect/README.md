@@ -71,7 +71,7 @@ Abaixo, a documentação do comando
 
 Será necessário executar o simulador apenas uma vez para criar a tabela na database.
 
-## 7 - Criar um tópico no Kafka
+## 6 - Criar um tópico no Kafka
 
 Vamos criar um tópico no kafka que irá armazenar os dados movidos da fonte.
 
@@ -86,7 +86,7 @@ docker-compose exec broker \
 
 O sufixo do nome do tópico deve possuir o mesmo nome da tabela cadastrado no arquivo `make_fake_data.py` caso seja necessário customizar.
 
-## 8 - Registrar os parâmetros de configuração do connector no kafka
+## 7 - Registrar os parâmetros de configuração do connector no kafka
 
 Para isso, vamos precisar de um arquivo no formato `json` contendo as configurações do conector que vamos registrar. O arquivo `connect_postgres.config` possui um exemplo de implementação. O conteúdo do arquivo está transcrito abaixo:
 
@@ -124,7 +124,40 @@ docker logs -f connect
 
 e verifique se não há nenhuma mensagem de erro. 
 
-## 9 - Iniciar um stream no ksqlDB
+Agora, vamos subir um `sink connector` para entregar os dados desse tópico diretamente ao S3. Um exemplo de configuração do conector está apresentado abaixo:
+
+```json
+{
+    "name": "customers-s3-sink",
+    "config": {
+        "connector.class": "io.confluent.connect.s3.S3SinkConnector",
+        "format.class": "io.confluent.connect.s3.format.json.JsonFormat",
+        "keys.format.class": "io.confluent.connect.s3.format.json.JsonFormat",
+        "schema.generator.class": "io.confluent.connect.storage.hive.schema.DefaultSchemaGenerator",
+        "flush.size": 2,
+        "schema.compatibility": "FULL",
+        "s3.bucket.name": "NOME-DO-BUCKET",
+        "s3.region": "us-east-1",
+        "s3.object.tagging": true,
+        "s3.ssea.name": "AES256",
+        "topics.dir": "raw-data/kafka",
+        "storage.class": "io.confluent.connect.s3.storage.S3Storage",
+        "tasks.max": 1,
+        "topics": "postgres-customers"
+    }
+}
+```
+
+Para subir o sink, usamos o seguinte comando:
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+    --data @connectors/sink/connect_s3_sink.config localhost:8083/connectors
+```
+
+Este sink vai pegar todos os eventos no tópico `postgres-customers` e escrever no S3.
+
+## 8 - Iniciar um stream no ksqlDB
 
 Para iniciar o ksqlDB, fazemos
 
@@ -150,23 +183,23 @@ para mostrar os tópicos criados. Para verificar se nosso conector está rodando
 ksql> show connectors;
 ```
 
-    Connector Name  | Type   | Class                                         | Status                      
-    -------------------------------------------------------------------------------------------------------
-    psg-connector   | SOURCE | io.confluent.connect.jdbc.JdbcSourceConnector | RUNNING (1/1 tasks RUNNING) 
-    -------------------------------------------------------------------------------------------------------
+    Connector Name    | Type   | Class                                         | Status                      
+    ----------------------------------------------------------------------------------------------------------
+    postg-connector   | SOURCE | io.confluent.connect.jdbc.JdbcSourceConnector | RUNNING (1/1 tasks RUNNING) 
+    ----------------------------------------------------------------------------------------------------------
 
 O Status deve estar como RUNNING.
 
-OK! O Kafka agora está puxando dados da tabela e registrando no tópico `psg-customers`. Podemos conferir o fluxo de dados no tópico com
+OK! O Kafka agora está puxando dados da tabela e registrando no tópico `postgres-customers`. Podemos conferir o fluxo de dados no tópico com
 
 ```
-ksql> print psg-customers;
+ksql> print 'postgres-customers';
 ```
 
 Isso vai exibir as mensagens como ficam registradas no tópico. Para consumir o dado de uma maneira mais interessante, podemos criar um STREAM:
 
 ```
-ksql> create stream custstream WITH (kafka_topic='psg-customers', value_format='AVRO');
+ksql> create stream custstream WITH (kafka_topic='postgres-customers', value_format='AVRO');
 ```
 
 Após a mensagem de confirmação, podemos verificar o stream assim:
@@ -177,7 +210,7 @@ ksql> show streams;
 
     Stream Name         | Kafka Topic                 | Key Format | Value Format | Windowed 
     ------------------------------------------------------------------------------------------
-    CUSTSTREAM          | psg-customers               | KAFKA      | AVRO         | false    
+    CUSTSTREAM          | postgres-customers          | KAFKA      | AVRO         | false    
     KSQL_PROCESSING_LOG | default_ksql_processing_log | KAFKA      | JSON         | false    
     ------------------------------------------------------------------------------------------
 
@@ -187,19 +220,17 @@ Para fazer uma consulta rápida ao stream (apenas exibí-lo na tela), podemos fa
 ksql> select * from custstream emit changes;
 ```
 
-O output dessa consulta não é dos melhores. Além de conter um número grande de colunas, dificultando a visualização, todas as colunas de data estão nos formatos INT ou BIGINT o que não é nada intuitivo para interpretação. Podemos fazer uma consulta mais enxuta e já corrigindo essas datas com o seguinte código:
+O output dessa consulta não é dos melhores pois há um número grande de colunas, dificultando a visualização. Podemos fazer uma consulta mais enxuta com o seguinte código:
 
 ```
-ksql> select nome, telefone, email, 
->DATETOSTRING(nascimento, 'yyyy-MM-dd') as dt_nascimento,
->TIMESTAMPTOSTRING(dt_update, 'yyyy-MM-dd HH:mm:ss.SSS', 'UTC') as dt_updt_conv
+ksql> select nome, telefone, email, nascimento, dt_update
 >from custstream emit changes;
 ```
 
 A consulta retorna a seguinte tabela:
 
     +-------------------------+-------------------------+--------------------------+-------------------------+-------------------------+
-    |NOME                     |TELEFONE                 |EMAIL                     |DT_NASCIMENTO            |DT_UPDT_CONV             |
+    |NOME                     |TELEFONE                 |EMAIL                     |NASCIMENTO               |DT_UPDATE                |
     +-------------------------+-------------------------+--------------------------+-------------------------+-------------------------+
     |Scott Johnson            |+1-475-559-2163x6531     |michelle01@example.org    |1970-01-01               |2021-04-12 23:26:03.655  |
     |Amy Shannon              |902-547-6469             |michaelrogers@example.com |1969-12-31               |2021-04-12 23:26:04.211  |
@@ -208,17 +239,15 @@ A consulta retorna a seguinte tabela:
 
 Bem mais interessante!
 
-## 10 - Criando uma tabela com processamento em tempo real
+## 9 - Criando uma tabela com processamento em tempo real
 
 Primeiro, vamos criar um stream que filtra apenas as pessoas "jovens" (aqui definido como quem nasceu depois de 2000-01-01) e armazena esses dados no tópico `jovens`. O tópico será criado ao criar o stream.
 
 ```
 ksql> create stream jovens WITH (kafka_topic='jovens', value_format='AVRO') AS
->select nome, sexo, telefone, email, profissao,
->DATETOSTRING(nascimento, 'yyyy-MM-dd') as dt_nascimento,
->TIMESTAMPTOSTRING(dt_update, 'yyyy-MM-dd HH:mm:ss.SSS', 'UTC') as dt_updt
+>select nome, sexo, telefone, email, profissao, nascimento, dt_update,
 >from custstream
->WHERE DATETOSTRING(nascimento, 'yyyy-MM-dd') >= '2000-01-01'
+>WHERE nascimento >= '2000-01-01'
 >emit changes;
 ```
 
@@ -231,7 +260,7 @@ ksql> show streams;
     Stream Name         | Kafka Topic                 | Key Format | Value Format | Windowed 
     ------------------------------------------------------------------------------------------
     JOVENS              | jovens                      | KAFKA      | AVRO         | false    
-    CUSTSTREAM          | psg-customers               | KAFKA      | AVRO         | false    
+    CUSTSTREAM          | postgres-customers          | KAFKA      | AVRO         | false    
     KSQL_PROCESSING_LOG | default_ksql_processing_log | KAFKA      | JSON         | false    
     ------------------------------------------------------------------------------------------
 
@@ -241,9 +270,9 @@ Agora, vamos criar um stream que fará a classificação das pessoas entre joven
 ksql> create stream idadeclass WITH (kafka_topic='idadeclass', value_format='AVRO') AS
 >select nome, telefone, email, profissao,
 >CASE
->WHEN DATETOSTRING(nascimento, 'yyyy-MM-dd') >= '2000-01-01' THEN 'JOVEM'
+>WHEN nascimento >= '2000-01-01' THEN 'JOVEM'
 >ELSE 'ADULTO' END AS idadecat,
->TIMESTAMPTOSTRING(dt_update, 'yyyy-MM-dd HH:mm:ss.SSS', 'UTC') as dt_updt
+>dt_update
 >from custstream
 >emit changes;
 ```
@@ -261,7 +290,7 @@ ksql> create table idadecont WITH (kafka_topic='idadecont', value_format='AVRO')
 
 E teremos uma tabela contando cada caso de JOVEM e ADULTO para cada intervalo de 30 segundos.
 
-## 11 - Ingestão de tópicos no S3
+## 10 - Ingestão de novos tópicos no S3
 
 Vamos agora configurar outro tipo de connector, um *sink connector* para entregar dados armazenados no tópico `jovens` no S3. Para isso, precisamos de um arquivo de configuração do conector similar ao que elaboramos antes, mas agora com outros parâmetros. Vamos nomeá-lo `connect_s3_sink_jovens.config`:
 
@@ -270,7 +299,7 @@ Vamos agora configurar outro tipo de connector, um *sink connector* para entrega
     "name": "s3-jovens-sink",
     "config": {
         "connector.class": "io.confluent.connect.s3.S3SinkConnector",
-        "format.class": "io.confluent.connect.s3.format.parquet.ParquetFormat",
+        "format.class": "io.confluent.connect.s3.format.avro.AvroFormat",
         "flush.size": 10,
         "schema.compatibility": "FULL",
         "s3.bucket.name": "NOME_DO_BUCKET",
@@ -289,7 +318,7 @@ E vamos cadastrá-lo no cluster connect:
 
 ```bash
 curl -X POST -H "Content-Type: application/json" \
-    --data @connect_s3_sink_jovens.config http://localhost:8083/connectors
+    --data @connectors/sink/s3_sink_jovens.config http://localhost:8083/connectors
 ```
 
 Vamos criar também uma configuração de conector para entregar dados do tópico `idadecount` para o S3 Vamos chamá-la de `connect_s3_sink_count.config`.
@@ -321,7 +350,7 @@ E então, cadastrá-lo no cluster connect:
 
 ```bash
 curl -X POST -H "Content-Type: application/json" \
-    --data @connect_s3_sink_count.config http://localhost:8083/connectors
+    --data @connectors/sink/s3_sink_count.config http://localhost:8083/connectors
 ```
 
 PRONTO!! Agora os dados dos tópicos estão sendo entregues no bucket S3 definido. Vamos verificar no ksql se está tudo OK com os conectores:
