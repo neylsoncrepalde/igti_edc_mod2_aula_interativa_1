@@ -57,7 +57,7 @@ if __name__ == "__main__":
         telefone   = [faker.phone_number() for i in range(args.n)]
         email      = [faker.safe_email() for i in range(args.n)]
         foto       = [faker.image_url() for i in range(args.n)]
-        nascimento = [faker.date_of_birth() for i in range(args.n)]
+        nascimento = [faker.date_of_birth().strftime("%Y-%m-%d") for i in range(args.n)]
         profissao  = [faker.job() for i in range(args.n)]
         dt_update  = [datetime.now() for i in range(args.n)]
 
