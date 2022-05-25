@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Generate fake data...')
 
-    parser.add_argument('--interval', type=int, default=0.5,
+    parser.add_argument('--interval', type=float, default=0.5,
                         help='interval of generating fake data in seconds')
     parser.add_argument('-n', type=int, default=1,
                         help='sample size')
