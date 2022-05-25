@@ -4,7 +4,9 @@ from pyspark.sql.types import *
 
 spark = (
     SparkSession.builder
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.2")
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.2,io.delta:delta-core_2.12:1.0.0")
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
     .appName("ConsumeFromKafka")
     .getOrCreate()
 )
@@ -38,6 +40,7 @@ schema1 = StructType([
 schema2 = StructType([
     StructField("nome", StringType(), False),
     StructField("sexo", StringType(), False),
+    StructField("endereco", StringType(), False),
     StructField("telefone", StringType(), False),
     StructField("email", StringType(), False),
     StructField("foto", StringType(), False),
@@ -66,21 +69,21 @@ consulta = (
         f.datediff(f.col("today"), f.col("dt_nascimento"))/365.25, 0)
     )
     .select('nome', 'sexo', 'email', 'profissao', 'dt_nascimento', 'today', 'idade')
-    # .groupBy("sexo")
-    # .agg(
-    #     f.count(f.lit(1)).alias("total"),
-    #     f.first("dt_nascimento").alias("first_nascimento"),
-    #     f.first("today").alias("first_now"),
-    #     f.round(f.avg("idade"), 2).alias("media_idade")
-    # )
+    .groupBy("sexo")
+    .agg(
+        f.count(f.lit(1)).alias("total"),
+        f.first("dt_nascimento").alias("first_nascimento"),
+        f.first("today").alias("first_now"),
+        f.round(f.avg("idade"), 2).alias("media_idade")
+    )
 )
 
 (
     consulta
     .writeStream
-    .format("console")
-    .outputMode("append")
+    .format("delta")
+    .outputMode("complete")
     .option("checkpointLocation", "checkpoint")
-    .start()
+    .start("./delta/customers")
     .awaitTermination()
 )
