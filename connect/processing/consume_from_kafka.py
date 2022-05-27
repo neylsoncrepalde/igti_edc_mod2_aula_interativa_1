@@ -80,7 +80,7 @@ consulta = (
     .writeStream
     .format("console")
     .outputMode("append")
-    .option("checkpointLocation", "checkpoint")
+    #.option("checkpointLocation", "checkpoint")
     .start()
     .awaitTermination()
 )

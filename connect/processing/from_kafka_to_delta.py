@@ -72,8 +72,8 @@ consulta = (
     .groupBy("sexo")
     .agg(
         f.count(f.lit(1)).alias("total"),
-        f.first("dt_nascimento").alias("first_nascimento"),
-        f.first("today").alias("first_now"),
+        f.min("dt_nascimento").alias("min_nascimento"),
+        f.max("dt_nascimento").alias("max_nascimento"),
         f.round(f.avg("idade"), 2).alias("media_idade")
     )
 )
